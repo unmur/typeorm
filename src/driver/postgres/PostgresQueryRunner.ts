@@ -562,9 +562,9 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
         // rename ENUM types
         const enumColumns = newTable.columns.filter(column => column.type === "enum" || column.type === "simple-enum");
         for (let column of enumColumns) {
-            const oldEnumType = await this.getEnumTypeName(oldTable, column);
-            upQueries.push(new Query(`ALTER TYPE "${oldEnumType.enumTypeSchema}"."${oldEnumType.enumTypeName}" RENAME TO ${this.buildEnumName(newTable, column, false)}`));
-            downQueries.push(new Query(`ALTER TYPE ${this.buildEnumName(newTable, column)} RENAME TO "${oldEnumType.enumTypeName}"`));
+            const oldEnumType = await this.getUserDefinedTypeName(oldTable, column);
+            upQueries.push(new Query(`ALTER TYPE "${oldEnumType.schema}"."${oldEnumType.name}" RENAME TO ${this.buildEnumName(newTable, column, false)}`));
+            downQueries.push(new Query(`ALTER TYPE ${this.buildEnumName(newTable, column)} RENAME TO "${oldEnumType.name}"`));
         }
         await this.executeQueries(upQueries, downQueries);
     }
@@ -698,9 +698,9 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
 
                 // rename ENUM type
                 if (oldColumn.type === "enum" || oldColumn.type === "simple-enum") {
-                    const oldEnumType = await this.getEnumTypeName(table, oldColumn);
-                    upQueries.push(new Query(`ALTER TYPE "${oldEnumType.enumTypeSchema}"."${oldEnumType.enumTypeName}" RENAME TO ${this.buildEnumName(table, newColumn, false)}`));
-                    downQueries.push(new Query(`ALTER TYPE ${this.buildEnumName(table, newColumn)} RENAME TO "${oldEnumType.enumTypeName}"`));
+                    const oldEnumType = await this.getUserDefinedTypeName(table, oldColumn);
+                    upQueries.push(new Query(`ALTER TYPE "${oldEnumType.schema}"."${oldEnumType.name}" RENAME TO ${this.buildEnumName(table, newColumn, false)}`));
+                    downQueries.push(new Query(`ALTER TYPE ${this.buildEnumName(table, newColumn)} RENAME TO "${oldEnumType.name}"`));
                 }
 
                 // rename column primary key constraint
@@ -1045,8 +1045,8 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
         if (column.type === "enum" || column.type === "simple-enum") {
             const hasEnum = await this.hasEnumType(table, column);
             if (hasEnum) {
-                const enumType = await this.getEnumTypeName(table, column);
-                const escapedEnumName = `"${enumType.enumTypeSchema}"."${enumType.enumTypeName}"`;
+                const enumType = await this.getUserDefinedTypeName(table, column);
+                const escapedEnumName = `"${enumType.schema}"."${enumType.name}"`;
                 upQueries.push(this.dropEnumTypeSql(table, column, escapedEnumName));
                 downQueries.push(this.createEnumTypeSql(table, column, escapedEnumName));
             }
@@ -1637,22 +1637,27 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
                     }
 
                     // check if column has user-defined data type
-                    // TODO: for now only ENUM type may be defined by a user.
-                    //  We will need to add additional logic if another custom types will be supported.
                     if (dbColumn["data_type"] === "USER-DEFINED") {
-                        // check if `enumName` is specified by user
-                        const { enumTypeName } = await this.getEnumTypeName(table, tableColumn)
-                        const builtEnumName = this.buildEnumName(table, tableColumn, false, true)
-                        if (builtEnumName !== enumTypeName)
-                            tableColumn.enumName = enumTypeName
+                        const { name } = await this.getUserDefinedTypeName(table, tableColumn)
 
-                        tableColumn.type = "enum";
+                        // check if `enumName` is specified by user
+                        const builtEnumName = this.buildEnumName(table, tableColumn, false, true)
+                        const enumName = builtEnumName !== name ? name : undefined
+
+                        // check if type is ENUM
                         const sql = `SELECT "e"."enumlabel" AS "value" FROM "pg_enum" "e" ` +
                         `INNER JOIN "pg_type" "t" ON "t"."oid" = "e"."enumtypid" ` +
                         `INNER JOIN "pg_namespace" "n" ON "n"."oid" = "t"."typnamespace" ` +
-                        `WHERE "n"."nspname" = '${dbTable["table_schema"]}' AND "t"."typname" = '${this.buildEnumName(table, tableColumn, false, true)}'`;
+                        `WHERE "n"."nspname" = '${dbTable["table_schema"]}' AND "t"."typname" = '${enumName}'`;
                         const results: ObjectLiteral[] = await this.query(sql);
-                        tableColumn.enum = results.map(result => result["value"]);
+
+                        if (results.length) {
+                            tableColumn.type = "enum";
+                            tableColumn.enum = results.map(result => result["value"]);
+                            tableColumn.enumName = enumName
+                        } else {
+                            tableColumn.type = name
+                        }
                     }
 
                     if (tableColumn.type === "geometry") {
@@ -2181,7 +2186,7 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
         }).join(".");
     }
 
-    protected async getEnumTypeName(table: Table, column: TableColumn) {
+    protected async getUserDefinedTypeName(table: Table, column: TableColumn) {
         const currentSchema = await this.getCurrentSchema()
         let [schema, name] = table.name.split(".");
         if (!name) {
@@ -2201,8 +2206,8 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
             udtName = udtName.substr(1, udtName.length)
         }
         return {
-            enumTypeSchema: result[0]["udt_schema"],
-            enumTypeName: udtName
+            schema: result[0]["udt_schema"],
+            name: udtName
         };
     }
 
