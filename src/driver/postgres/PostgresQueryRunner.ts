@@ -1625,12 +1625,6 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
                         }
                     }
 
-                    if (dbColumn["data_type"].toLowerCase() === "array") {
-                        tableColumn.isArray = true;
-                        const type = tableColumn.type.replace("[]", "");
-                        tableColumn.type = this.connection.driver.normalizeType({type: type});
-                    }
-
                     if (tableColumn.type === "interval"
                         || tableColumn.type === "time without time zone"
                         || tableColumn.type === "time with time zone"
@@ -1650,17 +1644,21 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
 
                         // check if type is ENUM
                         const sql = `SELECT "e"."enumlabel" AS "value" FROM "pg_enum" "e" ` +
-                        `INNER JOIN "pg_type" "t" ON "t"."oid" = "e"."enumtypid" ` +
-                        `INNER JOIN "pg_namespace" "n" ON "n"."oid" = "t"."typnamespace" ` +
-                        `WHERE "n"."nspname" = '${dbTable["table_schema"]}' AND "t"."typname" = '${enumName || name}'`;
+                            `INNER JOIN "pg_type" "t" ON "t"."oid" = "e"."enumtypid" ` +
+                            `INNER JOIN "pg_namespace" "n" ON "n"."oid" = "t"."typnamespace" ` +
+                            `WHERE "n"."nspname" = '${dbTable["table_schema"]}' AND "t"."typname" = '${enumName || name}'`;
                         const results: ObjectLiteral[] = await this.query(sql);
 
                         if (results.length) {
                             tableColumn.type = "enum";
                             tableColumn.enum = results.map(result => result["value"]);
                             tableColumn.enumName = enumName
-                        } else {
-                            tableColumn.type = name
+                        }
+
+                        if (dbColumn["data_type"] === "ARRAY") {
+                            tableColumn.isArray = true;
+                            const type = tableColumn.type.replace("[]", "");
+                            tableColumn.type = this.connection.driver.normalizeType({type: type});
                         }
                     }
 
