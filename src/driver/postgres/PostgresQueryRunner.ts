@@ -1495,24 +1495,17 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
          * pg_catalog.pg_attribute table to get column information.
          * @see https://stackoverflow.com/a/19541865
          */
-        const columnsSql = `
-            SELECT columns.*,
-              pg_catalog.col_description(('"' || table_catalog || '"."' || table_schema || '"."' || table_name || '"')::regclass::oid, ordinal_position) AS description,
-              ('"' || "udt_schema" || '"."' || "udt_name" || '"')::"regtype" AS "regtype",
-              pg_catalog.format_type("col_attr"."atttypid", "col_attr"."atttypmod") AS "format_type"
-              FROM "information_schema"."columns"
-              LEFT JOIN "pg_catalog"."pg_attribute" AS "col_attr"
-              ON "col_attr"."attname" = "columns"."column_name"
-              AND "col_attr"."attrelid" = (
-                SELECT
-                  "cls"."oid" FROM "pg_catalog"."pg_class" AS "cls"
-                  LEFT JOIN "pg_catalog"."pg_namespace" AS "ns"
-                  ON "ns"."oid" = "cls"."relnamespace"
-                WHERE "cls"."relname" = "columns"."table_name"
-                AND "ns"."nspname" = "columns"."table_schema"
-              )
-            WHERE
-            ` + tablesCondition;
+        const columnsSql = `SELECT columns.*, pg_catalog.col_description(('"' || table_catalog || '"."' || table_schema || '"."' || table_name || '"')::regclass::oid, ordinal_position) AS description, ` +
+                `('"' || "udt_schema" || '"."' || "udt_name" || '"')::"regtype" AS "regtype", pg_catalog.format_type("col_attr"."atttypid", "col_attr"."atttypmod") AS "format_type" ` +
+            `FROM "information_schema"."columns" ` +
+            `LEFT JOIN "pg_catalog"."pg_attribute" AS "col_attr" ON "col_attr"."attname" = "columns"."column_name" ` +
+                `AND "col_attr"."attrelid" = ( ` +
+                    `SELECT "cls"."oid" FROM "pg_catalog"."pg_class" AS "cls" ` +
+                    `LEFT JOIN "pg_catalog"."pg_namespace" AS "ns" ON "ns"."oid" = "cls"."relnamespace" ` +
+                    `WHERE "cls"."relname" = "columns"."table_name" ` +
+                    `AND "ns"."nspname" = "columns"."table_schema" `+
+                `) ` +
+            `WHERE ` + tablesCondition;
 
         const constraintsCondition = tableNames.map(tableName => {
             let [schema, name] = tableName.split(".");
@@ -1574,6 +1567,7 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
             `INNER JOIN "pg_class" "cl" ON "cl"."oid" = "con"."confrelid" ${isPartitionCondition}` +
             `INNER JOIN "pg_namespace" "ns" ON "cl"."relnamespace" = "ns"."oid" ` +
             `INNER JOIN "pg_attribute" "att2" ON "att2"."attrelid" = "con"."conrelid" AND "att2"."attnum" = "con"."parent"`;
+
         const [dbTables, dbColumns, dbConstraints, dbIndices, dbForeignKeys]: ObjectLiteral[][] = await Promise.all([
             this.query(tablesSql),
             this.query(columnsSql),
@@ -1642,7 +1636,10 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
                         tableColumn.precision = !this.isDefaultColumnPrecision(table, tableColumn, dbColumn["datetime_precision"]) ? dbColumn["datetime_precision"] : undefined;
                     }
 
-                    if (tableColumn.type.indexOf("enum") !== -1) {
+                    // check if column has user-defined data type
+                    // TODO: for now only ENUM type may be defined by a user.
+                    //  We will need to add additional logic if another custom types will be supported.
+                    if (dbColumn["data_type"] === "USER-DEFINED") {
                         // check if `enumName` is specified by user
                         const { enumTypeName } = await this.getEnumTypeName(table, tableColumn)
                         const builtEnumName = this.buildEnumName(table, tableColumn, false, true)
