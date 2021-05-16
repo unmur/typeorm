@@ -562,6 +562,9 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
         // rename ENUM types
         const enumColumns = newTable.columns.filter(column => column.type === "enum" || column.type === "simple-enum");
         for (let column of enumColumns) {
+            // skip renaming for user-defined enum name
+            if (column.enumName) continue;
+
             const oldEnumType = await this.getUserDefinedTypeName(oldTable, column);
             upQueries.push(new Query(`ALTER TYPE "${oldEnumType.schema}"."${oldEnumType.name}" RENAME TO ${this.buildEnumName(newTable, column, false)}`));
             downQueries.push(new Query(`ALTER TYPE ${this.buildEnumName(newTable, column)} RENAME TO "${oldEnumType.name}"`));
@@ -1636,8 +1639,9 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
                         tableColumn.precision = !this.isDefaultColumnPrecision(table, tableColumn, dbColumn["datetime_precision"]) ? dbColumn["datetime_precision"] : undefined;
                     }
 
-                    // check if column has user-defined data type
-                    if (dbColumn["data_type"] === "USER-DEFINED") {
+                    // check if column has user-defined data type.
+                    // NOTE: if ENUM type defined with "array:true" it comes with ARRAY type instead of USER-DEFINED
+                    if (dbColumn["data_type"] === "USER-DEFINED" || dbColumn["data_type"] === "ARRAY") {
                         const { name } = await this.getUserDefinedTypeName(table, tableColumn)
 
                         // check if `enumName` is specified by user
@@ -1648,7 +1652,7 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
                         const sql = `SELECT "e"."enumlabel" AS "value" FROM "pg_enum" "e" ` +
                         `INNER JOIN "pg_type" "t" ON "t"."oid" = "e"."enumtypid" ` +
                         `INNER JOIN "pg_namespace" "n" ON "n"."oid" = "t"."typnamespace" ` +
-                        `WHERE "n"."nspname" = '${dbTable["table_schema"]}' AND "t"."typname" = '${enumName}'`;
+                        `WHERE "n"."nspname" = '${dbTable["table_schema"]}' AND "t"."typname" = '${enumName || name}'`;
                         const results: ObjectLiteral[] = await this.query(sql);
 
                         if (results.length) {
